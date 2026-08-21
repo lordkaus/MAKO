@@ -4,7 +4,8 @@ import QtQuick.Layouts
 
 Dialog {
     id: root
-    title: t.detectProcess
+    property var strings
+    title: strings ? strings.detectProcess : "Detect Process"
     signal selected(string processName)
 
     modal: true
@@ -22,7 +23,7 @@ Dialog {
 
         Label {
             Layout.fillWidth: true
-            text: t.processListDesc
+            text: strings ? strings.processListDesc : "Select a running process."
             wrapMode: Text.WordWrap
             color: Qt.rgba(palette.text.r, palette.text.g, palette.text.b, 0.7)
         }
@@ -33,14 +34,14 @@ Dialog {
 
             Button {
                 Layout.fillWidth: true
-                text: t.refresh
+                text: strings ? strings.refresh : "Refresh"
                 icon.name: "view-refresh"
                 onClicked: backend.refreshProcesses()
             }
 
             Label {
                 Layout.fillWidth: true
-                text: backend.processCount + " " + t.processesFound
+                text: backend.processCount + " " + (strings ? strings.processesFound : "processes found")
                 horizontalAlignment: Text.AlignRight
                 color: Qt.rgba(palette.text.r, palette.text.g, palette.text.b, 0.7)
             }
@@ -104,13 +105,13 @@ Dialog {
 
             Button {
                 Layout.fillWidth: true
-                text: t.cancel
+                text: strings ? strings.cancel : "Cancel"
                 onClicked: root.close()
             }
 
             Button {
                 Layout.fillWidth: true
-                text: t.selectProcess
+                text: strings ? strings.selectProcess : "Select"
                 enabled: processList.currentIndex >= 0
                 onClicked: {
                     var name = backend.getSelectedProcessName();

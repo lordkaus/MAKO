@@ -102,6 +102,7 @@ ApplicationWindow {
     ProcessDialog {
         id: process_dialog
         parent: ApplicationWindow.contentItem
+        strings: t
         onSelected: processName => {
             active_in_name.text = processName;
             backend.addActiveIn(processName);
