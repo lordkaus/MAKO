@@ -90,18 +90,11 @@ ApplicationWindow {
                 icon.name: "list-remove"
                 onClicked: backend.removeActiveIn()
             }
-            Button {
-                icon.name: "system-search"
-                onClicked: process_dialog.open()
-                ToolTip.text: t.detectProcess
-                ToolTip.visible: hovered
-            }
         }
     }
 
     ProcessDialog {
         id: process_dialog
-        parent: ApplicationWindow.contentItem
         strings: t
         onSelected: processName => {
             active_in_name.text = processName;
@@ -247,11 +240,18 @@ ApplicationWindow {
                         title: t.activeIn
                         description: t.activeInDesc
 
-                        Button {
+                        RowLayout {
                             Layout.alignment: Qt.AlignRight
+                            spacing: 4
 
-                            text: t.editEllipsis
-                            onClicked: active_in_dialog.open()
+                            Button {
+                                text: t.editEllipsis
+                                onClicked: active_in_dialog.open()
+                            }
+                            Button {
+                                text: t.detectProcess
+                                onClicked: process_dialog.open()
+                            }
                         }
                     }
 
