@@ -92,8 +92,9 @@ ApplicationWindow {
             }
             Button {
                 icon.name: "system-search"
-                tooltip: t.detectProcess
                 onClicked: process_dialog.open()
+                ToolTip.text: t.detectProcess
+                ToolTip.visible: hovered
             }
         }
     }
