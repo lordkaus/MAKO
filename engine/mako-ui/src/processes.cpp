@@ -71,8 +71,11 @@ namespace {
         if (!mapsFile.open(QIODevice::ReadOnly | QIODevice::Text))
             return false;
 
-        while (!mapsFile.atEnd()) {
+        // note: never use atEnd() on procfs files, they report size 0
+        for (;;) {
             const auto line = mapsFile.readLine();
+            if (line.isEmpty())
+                break;
             if (line.contains("libvulkan") ||
                 line.contains("nvidia_icd") ||
                 line.contains("radeon_icd") ||
@@ -111,8 +114,11 @@ namespace {
             if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
                 continue;
 
-            while (!file.atEnd()) {
+            // note: never use atEnd() on procfs files, they report size 0
+            for (;;) {
                 const auto line = file.readLine();
+                if (line.isEmpty())
+                    break;
                 if (!line.startsWith("drm-engine-"))
                     continue;
                 const int colon = line.indexOf(':');
@@ -136,8 +142,12 @@ namespace {
         if (!cgroup.open(QIODevice::ReadOnly | QIODevice::Text))
             return false;
 
-        while (!cgroup.atEnd()) {
-            if (cgroup.readLine().contains("/app.slice/"))
+        // note: never use atEnd() on procfs files, they report size 0
+        for (;;) {
+            const auto line = cgroup.readLine();
+            if (line.isEmpty())
+                break;
+            if (line.contains("/app.slice/"))
                 return true;
         }
         return false;
