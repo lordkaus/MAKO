@@ -13,6 +13,7 @@ namespace mako::ui {
         QString name;
         QString cmdline;
         int gpuUsage; // percentage, -1 if unknown
+        quint64 gpuTimeNs = 0; // cumulative GPU engine time from fdinfo
     };
 
     /// detect GPU vendor: "nvidia", "amd", "intel", or "unknown"

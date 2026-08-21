@@ -10,7 +10,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QSet>
 
 #include <filesystem>
 #include <fstream>
@@ -52,6 +51,12 @@ namespace {
         QString cmdline;
     };
 
+    bool isNumeric(const QString& s) {
+        for (const auto& c : s)
+            if (!c.isDigit()) return false;
+        return !s.isEmpty();
+    }
+
     QString readProcComm(int pid) {
         QFile file(QString("/proc/%1/comm").arg(pid));
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -59,117 +64,7 @@ namespace {
         return file.readAll().trimmed();
     }
 
-    bool isNumeric(const QString& s) {
-        for (const auto& c : s)
-            if (!c.isDigit()) return false;
-        return !s.isEmpty();
-    }
-
-    bool hasDisplayConnection(int pid) {
-        QFile environFile(QString("/proc/%1/environ").arg(pid));
-        if (!environFile.open(QIODevice::ReadOnly))
-            return false;
-        QByteArray data = environFile.readAll();
-        return data.contains("DISPLAY=") || data.contains("WAYLAND_DISPLAY=");
-    }
-
-    bool isSystemNoise(const QString& name, const QString& cmdline) {
-        static const QStringList noiseNames = {
-            "bash", "zsh", "sh", "fish", "konsole", "plasmashell",
-            "kwin_wayland", "kwin_x11", "startplasma",
-            "kdeconnectd", "baloorunner", "xdg-desktop-por",
-            "xdg-permission-", "xdg-document-po",
-            "xsettingsd", "obexd", "shelly-notifica",
-            "cachyos-hello", "drkonqi-coredum",
-            "Isolated Web Co", "Isolated Servic",
-            "mako-ui", "mako-cli", "opencode",
-            "dbus-daemon", "pipewire", "wireplumber",
-            "pulseaudio", "plasma-discover", "systemd",
-            "kactivitymanagerd", "kaccess", "kcminit",
-            "kded5", "kded6", "khellInitial", "kscreen",
-            "ksmserver", "kwalletd", "polkit-kde",
-            "spectacle", "gwenview", "dolphin",
-            "latte-dock", "yakuake", "klipper",
-            "korgac", "kalarm", "kate", "kwrite",
-            "okular", "ark", "filelight", "partitionmanager",
-            "sddm", "Xwayland", "mutter", "gnome-shell",
-            "innamon-session", "cinnamon", "xfce4-session",
-            "lxqt-panel", "budgie-wm", "pantheon-",
-            "io.elementary.", "io.github.",
-        };
-
-        for (const auto& n : noiseNames) {
-            if (name.contains(n, Qt::CaseInsensitive))
-                return true;
-        }
-
-        static const QStringList noiseCmdParts = {
-            "-contentproc", "-isForBrowser", "-greomni", "-appomni",
-            "--bus-name", "--internal", "--sprite", "--type=utility",
-            "kdeconnect", "plasma-", "xdg-",
-        };
-        for (const auto& p : noiseCmdParts) {
-            if (cmdline.contains(p))
-                return true;
-        }
-
-        return false;
-    }
-
-    QSet<int> getWindowPids() {
-        QSet<int> pids;
-
-        QProcess wmctrl;
-        wmctrl.start("wmctrl", {"-l", "-p"});
-        wmctrl.waitForFinished(3000);
-        if (wmctrl.exitCode() == 0) {
-            const auto lines = QString::fromLocal8Bit(wmctrl.readAllStandardOutput()).split('\n', Qt::SkipEmptyParts);
-            for (const auto& line : lines) {
-                const auto parts = line.split(QRegularExpression("\\s+"));
-                if (parts.size() >= 3) {
-                    bool ok;
-                    int pid = parts[2].toInt(&ok);
-                    if (ok && pid > 0)
-                        pids.insert(pid);
-                }
-            }
-            if (!pids.isEmpty())
-                return pids;
-        }
-
-        QProcess xdotool;
-        xdotool.start("xdotool", {"search", "--onlyvisible", "--name", ""});
-        xdotool.waitForFinished(3000);
-        if (xdotool.exitCode() == 0) {
-            const auto lines = QString::fromLocal8Bit(xdotool.readAllStandardOutput()).split('\n', Qt::SkipEmptyParts);
-            for (const auto& wid : lines) {
-                QProcess pidQuery;
-                pidQuery.start("xdotool", {"getwindowpid", wid.trimmed()});
-                pidQuery.waitForFinished(1000);
-                if (pidQuery.exitCode() == 0) {
-                    bool ok;
-                    int pid = QString::fromLocal8Bit(pidQuery.readAllStandardOutput()).trimmed().toInt(&ok);
-                    if (ok && pid > 0)
-                        pids.insert(pid);
-                }
-            }
-            if (!pids.isEmpty())
-                return pids;
-        }
-
-        QDir procDir("/proc");
-        const auto entries = procDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const auto& entry : entries) {
-            if (!isNumeric(entry)) continue;
-            int pid = entry.toInt();
-            if (pid <= 0) continue;
-            if (hasDisplayConnection(pid))
-                pids.insert(pid);
-        }
-
-        return pids;
-    }
-
+    // process loads Vulkan libraries
     bool usesVulkan(int pid) {
         QFile mapsFile(QString("/proc/%1/maps").arg(pid));
         if (!mapsFile.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -187,6 +82,46 @@ namespace {
         return false;
     }
 
+    // process holds open GPU device handles (/dev/dri/* or /dev/nvidia*)
+    bool hasGpuHandles(int pid) {
+        QDir fdDir(QString("/proc/%1/fd").arg(pid));
+        if (!fdDir.exists())
+            return false;
+
+        const auto entries = fdDir.entryList(QDir::Files | QDir::System | QDir::NoDotAndDotDot);
+        for (const auto& entry : entries) {
+            const QString target = QFile::symLinkTarget(fdDir.filePath(entry));
+            if (target.startsWith("/dev/dri/") || target.startsWith("/dev/nvidia"))
+                return true;
+        }
+        return false;
+    }
+
+    // cumulative GPU engine time in nanoseconds from kernel fdinfo
+    quint64 getFdinfoGpuTimeNs(int pid) {
+        QDir fdinfoDir(QString("/proc/%1/fdinfo").arg(pid));
+        if (!fdinfoDir.exists())
+            return 0;
+
+        quint64 total = 0;
+        const auto entries = fdinfoDir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+        for (const auto& entry : entries) {
+            QFile file(fdinfoDir.filePath(entry));
+            if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+                continue;
+
+            while (!file.atEnd()) {
+                const auto line = file.readLine();
+                if (!line.startsWith("drm-engine-"))
+                    continue;
+                const int colon = line.indexOf(':');
+                const auto value = QString::fromLatin1(line.mid(colon + 1)).simplified();
+                total += value.section(' ', 0, 0).toULongLong();
+            }
+        }
+        return total;
+    }
+
     QList<RawProcess> readAllProcesses() {
         QList<RawProcess> processes;
         QDir procDir("/proc");
@@ -201,22 +136,49 @@ namespace {
             if (!cmdlineFile.open(QIODevice::ReadOnly))
                 continue;
             QByteArray cmdData = cmdlineFile.readAll();
-            if (cmdData.isEmpty()) continue;
+            if (cmdData.isEmpty()) continue; // kernel thread
 
             QString name = readProcComm(pid);
-            QString cmdline = QString::fromLocal8Bit(cmdData).replace('\0', ' ').trimmed();
 
-            if (name == "mako-ui" || name == "mako-cli") continue;
+            static const QSet<QString> excluded = {
+                "mako-ui", "mako-cli",
+                "kwin_wayland", "kwin_x11", "Xwayland",
+            };
+            if (excluded.contains(name)) continue;
             if (name.isEmpty() || name.startsWith("[")) continue;
 
+            QString cmdline = QString::fromLocal8Bit(cmdData).replace('\0', ' ').trimmed();
             processes.append({pid, name, cmdline});
         }
 
         return processes;
     }
 
+    // per-process GPU utilization via nvidia-smi pmon (sm % column)
     QMap<int, int> getNvidiaGpuUsage() {
         QMap<int, int> usage;
+
+        QProcess pmon;
+        pmon.start("nvidia-smi", {"pmon", "-c", "1"});
+        pmon.waitForFinished(3000);
+
+        if (pmon.exitCode() == 0 || !pmon.readAllStandardOutput().isEmpty()) {
+            const auto lines = QString::fromLocal8Bit(pmon.readAllStandardOutput()).split('\n');
+            for (const auto& line : lines) {
+                if (line.startsWith('#') || line.trimmed().isEmpty())
+                    continue;
+                const auto cols = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+                if (cols.size() >= 4) {
+                    bool ok = false;
+                    int pid = cols[1].toInt(&ok);
+                    int sm = cols[3].toInt();
+                    if (ok && pid > 0 && usage.value(pid, -1) < sm)
+                        usage[pid] = sm;
+                }
+            }
+            if (!usage.isEmpty())
+                return usage;
+        }
 
         QProcess proc;
         proc.start("nvidia-smi", {
@@ -224,7 +186,6 @@ namespace {
             "--format=csv,noheader,nounits"
         });
         proc.waitForFinished(3000);
-
         if (proc.exitCode() != 0) return usage;
 
         const auto lines = QString::fromLocal8Bit(proc.readAllStandardOutput()).split('\n', Qt::SkipEmptyParts);
@@ -232,21 +193,7 @@ namespace {
             const auto parts = line.split(',');
             if (parts.size() < 2) continue;
             int pid = parts[0].trimmed().toInt();
-            if (pid > 0) usage[pid] = -2;
-        }
-
-        QProcess utilProc;
-        utilProc.start("nvidia-smi", {
-            "--query-gpu=utilization.gpu",
-            "--format=csv,noheader,nounits"
-        });
-        utilProc.waitForFinished(3000);
-
-        if (utilProc.exitCode() == 0) {
-            int gpuUtil = QString::fromLocal8Bit(utilProc.readAllStandardOutput()).trimmed().toInt();
-            for (auto it = usage.begin(); it != usage.end(); ++it) {
-                if (it.value() == -2) it.value() = gpuUtil;
-            }
+            if (pid > 0) usage[pid] = -2; // active on gpu, unknown %
         }
 
         return usage;
@@ -300,39 +247,36 @@ namespace {
 QList<ProcessInfo> mako::ui::getRunningProcesses() {
     auto rawProcesses = readAllProcesses();
     const auto gpuUsage = getGpuUsageMap();
-    const auto windowPids = getWindowPids();
 
     QList<ProcessInfo> result;
     for (const auto& rp : rawProcesses) {
-        if (!windowPids.contains(rp.pid))
-            continue;
+        const bool vulkan = usesVulkan(rp.pid);
+        bool gpu = false;
+        if (!vulkan)
+            gpu = hasGpuHandles(rp.pid);
 
-        if (isSystemNoise(rp.name, rp.cmdline))
+        // only processes actually using the GPU or loading Vulkan
+        if (!vulkan && !gpu)
             continue;
 
         ProcessInfo info;
         info.pid = rp.pid;
-        info.name = rp.name;
         info.cmdline = rp.cmdline;
         info.gpuUsage = gpuUsage.value(rp.pid, -1);
+        info.gpuTimeNs = getFdinfoGpuTimeNs(rp.pid);
 
-        bool vulkan = usesVulkan(rp.pid);
-        QString displayName = rp.name;
-
+        info.name = rp.name;
         if (vulkan)
-            displayName += " [Vulkan]";
+            info.name += " [Vulkan]";
 
-        info.name = displayName;
         result.append(info);
     }
 
     std::sort(result.begin(), result.end(), [](const ProcessInfo& a, const ProcessInfo& b) {
-        bool aVulkan = a.name.contains("[Vulkan]");
-        bool bVulkan = b.name.contains("[Vulkan]");
-        if (aVulkan != bVulkan) return aVulkan;
         if (a.gpuUsage >= 0 && b.gpuUsage < 0) return true;
         if (a.gpuUsage < 0 && b.gpuUsage >= 0) return false;
-        if (a.gpuUsage >= 0 && b.gpuUsage >= 0) return a.gpuUsage > b.gpuUsage;
+        if (a.gpuUsage != b.gpuUsage) return a.gpuUsage > b.gpuUsage;
+        if (a.gpuTimeNs != b.gpuTimeNs) return a.gpuTimeNs > b.gpuTimeNs;
         return a.name.toLower() < b.name.toLower();
     });
 

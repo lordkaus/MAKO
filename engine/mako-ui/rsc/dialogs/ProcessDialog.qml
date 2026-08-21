@@ -47,8 +47,19 @@ Dialog {
             }
         }
 
+        Label {
+            visible: backend.processCount === 0
+            Layout.fillWidth: true
+            Layout.margins: 16
+            text: strings ? strings.noProcessesFound : "No GPU/Vulkan processes detected. Open your game or emulator and refresh."
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            color: Qt.rgba(palette.text.r, palette.text.g, palette.text.b, 0.6)
+        }
+
         ListView {
             id: processList
+            visible: backend.processCount > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true

@@ -65,6 +65,7 @@ var strings = [
         "processListDesc": "Select a running process. GPU usage is shown when available.",
         "refresh": "Refresh",
         "processesFound": "processes found",
+        "noProcessesFound": "No GPU/Vulkan processes detected. Open your game or emulator and click refresh.",
         "selectProcess": "Select",
         "cancel": "Cancel"
     },
@@ -130,6 +131,7 @@ var strings = [
         "processListDesc": "Selecione um processo em execução. O uso de GPU é mostrado quando disponível.",
         "refresh": "Atualizar",
         "processesFound": "processos encontrados",
+        "noProcessesFound": "Nenhum processo Vulkan/GPU detectado. Abra seu jogo ou emulador e clique em atualizar.",
         "selectProcess": "Selecionar",
         "cancel": "Cancelar"
     },
@@ -195,6 +197,7 @@ var strings = [
         "processListDesc": "Selecione um processo em execução. A utilização da GPU é mostrada quando disponível.",
         "refresh": "Atualizar",
         "processesFound": "processos encontrados",
+        "noProcessesFound": "Nenhum processo Vulkan/GPU detetado. Abra o seu jogo ou emulador e clique em atualizar.",
         "selectProcess": "Selecionar",
         "cancel": "Cancelar"
     },
@@ -260,6 +263,7 @@ var strings = [
         "processListDesc": "Seleccione un proceso en ejecución. El uso de GPU se muestra cuando está disponible.",
         "refresh": "Actualizar",
         "processesFound": "procesos encontrados",
+        "noProcessesFound": "No se detectaron procesos Vulkan/GPU. Abre tu juego o emulador y haz clic en actualizar.",
         "selectProcess": "Seleccionar",
         "cancel": "Cancelar"
     }

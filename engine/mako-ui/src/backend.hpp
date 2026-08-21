@@ -328,11 +328,13 @@ namespace mako::ui {
 
             QStringList displayList;
             for (const auto& proc : this->m_processes) {
-                QString entry;
+                QString entry = QString("%1 (PID %2)").arg(proc.name).arg(proc.pid);
+                if (!proc.cmdline.isEmpty())
+                    entry += " — " + proc.cmdline.left(50);
                 if (proc.gpuUsage >= 0)
-                    entry = QString("%1 — %2 (GPU: %3%)").arg(proc.name, proc.cmdline.left(40)).arg(proc.gpuUsage);
-                else
-                    entry = QString("%1 — %2").arg(proc.name, proc.cmdline.left(50));
+                    entry += QString(" [GPU: %1%]").arg(proc.gpuUsage);
+                else if (proc.gpuUsage == -2)
+                    entry += " [GPU]";
                 displayList.append(entry);
             }
 
