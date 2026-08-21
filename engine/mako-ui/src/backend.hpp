@@ -406,8 +406,10 @@ namespace mako::ui {
         std::atomic_bool m_dirty{false};
 
         // guards m_global / m_profiles / m_active_in_list_models against
-        // concurrent access from the detached configuration saving thread
-        mutable std::mutex m_state_mutex;
+        // concurrent access from the detached configuration saving thread;
+        // recursive because setters emit refreshUI while holding the lock,
+        // causing synchronous QML binding re-evaluation into the getters
+        mutable std::recursive_mutex m_state_mutex;
     };
 
 }
