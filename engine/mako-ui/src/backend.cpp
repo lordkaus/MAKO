@@ -71,10 +71,14 @@ Backend::Backend() {
                 continue;
 
             ls::ConfigFile config{};
-            config.global() = this->m_global;
-            config.profiles() = this->m_profiles;
 
             try {
+                {
+                    const std::scoped_lock lock(this->m_state_mutex);
+                    config.global() = this->m_global;
+                    config.profiles() = this->m_profiles;
+                }
+
                 std::filesystem::create_directories(path.parent_path());
                 if (!std::filesystem::exists(path.parent_path()))
                     throw ls::error("unable to create configuration directory");

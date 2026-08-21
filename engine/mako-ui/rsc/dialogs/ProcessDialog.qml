@@ -12,7 +12,7 @@ Dialog {
     dim: true
     x: (parent.width - width) / 2
     y: (parent.height - height) / 2
-    width: parent.width * 0.65
+    width: parent.width * 0.75
     height: parent.height * 0.7
 
     onOpened: backend.refreshProcesses()
@@ -68,22 +68,36 @@ Dialog {
 
             delegate: Rectangle {
                 width: ListView.view.width
-                height: 36
+                height: content.implicitHeight + 12
                 color: processList.currentIndex === index
                     ? Qt.rgba(palette.highlight.r, palette.highlight.g, palette.highlight.b, 0.3)
                     : index % 2 === 0 ? palette.alternateBase : "transparent"
                 radius: 2
 
-                RowLayout {
+                ColumnLayout {
+                    id: content
                     anchors.fill: parent
                     anchors.leftMargin: 8
                     anchors.rightMargin: 8
+                    anchors.topMargin: 6
+                    anchors.bottomMargin: 6
+                    spacing: 1
 
                     Label {
                         Layout.fillWidth: true
-                        text: modelData
+                        text: backend.getProcessDisplay(index)
                         elide: Text.ElideRight
+                        font.bold: true
                         color: palette.text
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: text.length > 0
+                        text: backend.getProcessPath(index)
+                        elide: Text.ElideMiddle
+                        font.pixelSize: 11
+                        color: Qt.rgba(palette.text.r, palette.text.g, palette.text.b, 0.55)
                     }
                 }
 

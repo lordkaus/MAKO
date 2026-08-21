@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <utility>
 
 #define getters public
@@ -68,6 +69,7 @@ namespace mako::ui {
         }
 
 #define VALIDATE_AND_GET_PROFILE(default) \
+    const std::scoped_lock state_lock(this->m_state_mutex); \
     if (!isValidProfileIndex()) return default; \
     auto& conf = this->m_profiles.at(static_cast<size_t>(this->m_profile_index));
 
@@ -164,6 +166,7 @@ namespace mako::ui {
     emit refreshUI();
 
         void dllUpdated(const QString& dll) {
+            const std::scoped_lock state_lock(this->m_state_mutex);
             auto& conf = this->m_global;
             if (dll.trimmed().isEmpty())
                 conf.dll = std::nullopt;
@@ -172,12 +175,14 @@ namespace mako::ui {
             MARK_DIRTY()
         }
         void allowFP16Updated(bool allow_fp16) {
+            const std::scoped_lock state_lock(this->m_state_mutex);
             auto& conf = this->m_global;
             conf.allow_fp16 = allow_fp16;
             MARK_DIRTY()
         }
 
 #define VALIDATE_AND_GET_PROFILE() \
+    const std::scoped_lock state_lock(this->m_state_mutex); \
     if (!isValidProfileIndex()) return; \
     auto& conf = this->m_profiles.at(static_cast<size_t>(this->m_profile_index));
 
@@ -285,6 +290,7 @@ namespace mako::ui {
         Q_INVOKABLE void createProfile(const QString& name) {
             if (name.trimmed().isEmpty()) return;
 
+            const std::scoped_lock state_lock(this->m_state_mutex);
             ls::GameConf conf;
             conf.name = name.toStdString();
             this->m_profiles.push_back(std::move(conf));
@@ -310,6 +316,7 @@ namespace mako::ui {
             if (!isValidProfileIndex())
                 return;
 
+            const std::scoped_lock state_lock(this->m_state_mutex);
             auto& profiles = this->m_profiles;
             profiles.erase(profiles.begin() + this->m_profile_index);
             auto& active_in_models = this->m_active_in_list_models;
@@ -327,19 +334,30 @@ namespace mako::ui {
             this->m_processes = getRunningProcesses();
 
             QStringList displayList;
-            for (const auto& proc : this->m_processes) {
-                QString entry = QString("%1 (PID %2)").arg(proc.name).arg(proc.pid);
-                if (!proc.cmdline.isEmpty())
-                    entry += " — " + proc.cmdline.left(50);
-                if (proc.gpuUsage >= 0)
-                    entry += QString(" [GPU: %1%]").arg(proc.gpuUsage);
-                else if (proc.gpuUsage == -2)
-                    entry += " [GPU]";
-                displayList.append(entry);
-            }
+            displayList.reserve(this->m_processes.size());
+            for (int i = 0; i < this->m_processes.size(); ++i)
+                displayList.append(getProcessDisplay(i));
 
             this->m_process_list_model->setStringList(displayList);
             emit processListUpdated();
+        }
+
+        Q_INVOKABLE QString getProcessDisplay(int index) const {
+            if (index < 0 || index >= this->m_processes.size())
+                return {};
+            const auto& proc = this->m_processes.at(index);
+            QString entry = QString("%1 (PID %2)").arg(proc.name).arg(proc.pid);
+            if (proc.gpuUsage >= 0)
+                entry += QString(" [GPU %1%]").arg(proc.gpuUsage);
+            else if (proc.gpuUsage == -2)
+                entry += " [GPU]";
+            return entry;
+        }
+
+        Q_INVOKABLE QString getProcessPath(int index) const {
+            if (index < 0 || index >= this->m_processes.size())
+                return {};
+            return this->m_processes.at(index).cmdline;
         }
 
         Q_INVOKABLE QString getSelectedProcessName() const {
@@ -386,6 +404,10 @@ namespace mako::ui {
         int m_selected_process_index{-1};
 
         std::atomic_bool m_dirty{false};
+
+        // guards m_global / m_profiles / m_active_in_list_models against
+        // concurrent access from the detached configuration saving thread
+        mutable std::mutex m_state_mutex;
     };
 
 }
