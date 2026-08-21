@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QSet>
 
 #include <filesystem>
 #include <fstream>
@@ -58,20 +59,87 @@ namespace {
         return file.readAll().trimmed();
     }
 
-    QString readProcCmdline(int pid) {
-        QFile file(QString("/proc/%1/cmdline").arg(pid));
-        if (!file.open(QIODevice::ReadOnly))
-            return {};
-        QByteArray data = file.readAll();
-        // cmdline is null-separated, replace with spaces
-        data.replace('\0', ' ');
-        return QString::fromLocal8Bit(data).trimmed();
-    }
-
     bool isNumeric(const QString& s) {
         for (const auto& c : s)
             if (!c.isDigit()) return false;
         return !s.isEmpty();
+    }
+
+    // get PIDs of processes that have a visible X11/Wayland window
+    QSet<int> getWindowPids() {
+        QSet<int> pids;
+
+        // try wmctrl first
+        QProcess wmctrl;
+        wmctrl.start("wmctrl", {"-l", "-p"});
+        wmctrl.waitForFinished(3000);
+        if (wmctrl.exitCode() == 0) {
+            const auto lines = QString::fromLocal8Bit(wmctrl.readAllStandardOutput()).split('\n', Qt::SkipEmptyParts);
+            for (const auto& line : lines) {
+                const auto parts = line.split(QRegularExpression("\\s+"));
+                if (parts.size() >= 3) {
+                    bool ok;
+                    int pid = parts[2].toInt(&ok);
+                    if (ok && pid > 0)
+                        pids.insert(pid);
+                }
+            }
+            if (!pids.isEmpty())
+                return pids;
+        }
+
+        // fallback: xdotool
+        QProcess xdotool;
+        xdotool.start("xdotool", {"search", "--onlyvisible", "--name", ""});
+        xdotool.waitForFinished(3000);
+        if (xdotool.exitCode() == 0) {
+            const auto lines = QString::fromLocal8Bit(xdotool.readAllStandardOutput()).split('\n', Qt::SkipEmptyParts);
+            for (const auto& wid : lines) {
+                QProcess pidQuery;
+                pidQuery.start("xdotool", {"getwindowpid", wid.trimmed()});
+                pidQuery.waitForFinished(1000);
+                if (pidQuery.exitCode() == 0) {
+                    bool ok;
+                    int pid = QString::fromLocal8Bit(pidQuery.readAllStandardOutput()).trimmed().toInt(&ok);
+                    if (ok && pid > 0)
+                        pids.insert(pid);
+                }
+            }
+        }
+
+        return pids;
+    }
+
+    // check if a process uses Vulkan by reading /proc/[pid]/maps
+    bool usesVulkan(int pid) {
+        QFile mapsFile(QString("/proc/%1/maps").arg(pid));
+        if (!mapsFile.open(QIODevice::ReadOnly | QIODevice::Text))
+            return false;
+
+        while (!mapsFile.atEnd()) {
+            const auto line = mapsFile.readLine();
+            if (line.contains("libvulkan") ||
+                line.contains("nvidia_icd") ||
+                line.contains("radeon_icd") ||
+                line.contains("anv_icd") ||
+                line.contains("vulkan"))
+                return true;
+        }
+        return false;
+    }
+
+    // get window title for a PID (from WM_CLASS or _NET_WM_NAME)
+    QString getWindowTitle(int pid) {
+        // try xdotool to get window name
+        QProcess xdotool;
+        xdotool.start("xdotool", {"search", "--pid", QString::number(pid), "--name", "getwindowname"});
+        xdotool.waitForFinished(2000);
+        if (xdotool.exitCode() == 0) {
+            auto name = QString::fromLocal8Bit(xdotool.readAllStandardOutput()).trimmed();
+            if (!name.isEmpty())
+                return name;
+        }
+        return {};
     }
 
     QList<RawProcess> readAllProcesses() {
@@ -84,7 +152,6 @@ namespace {
             int pid = entry.toInt();
             if (pid <= 0) continue;
 
-            // skip kernel threads (no cmdline)
             QFile cmdlineFile(QString("/proc/%1/cmdline").arg(pid));
             if (!cmdlineFile.open(QIODevice::ReadOnly))
                 continue;
@@ -94,9 +161,7 @@ namespace {
             QString name = readProcComm(pid);
             QString cmdline = QString::fromLocal8Bit(cmdData).replace('\0', ' ').trimmed();
 
-            // skip our own process
             if (name == "mako-ui" || name == "mako-cli") continue;
-            // skip system processes
             if (name.isEmpty() || name.startsWith("[")) continue;
 
             processes.append({pid, name, cmdline});
@@ -105,7 +170,6 @@ namespace {
         return processes;
     }
 
-    // parse nvidia-smi output to get per-process GPU usage
     QMap<int, int> getNvidiaGpuUsage() {
         QMap<int, int> usage;
 
@@ -123,12 +187,9 @@ namespace {
             const auto parts = line.split(',');
             if (parts.size() < 2) continue;
             int pid = parts[0].trimmed().toInt();
-            // we don't have per-process % from nvidia-smi query,
-            // but we know the process is using GPU
-            if (pid > 0) usage[pid] = -2; // marker: known GPU process
+            if (pid > 0) usage[pid] = -2;
         }
 
-        // try to get overall GPU utilization
         QProcess utilProc;
         utilProc.start("nvidia-smi", {
             "--query-gpu=utilization.gpu",
@@ -138,7 +199,6 @@ namespace {
 
         if (utilProc.exitCode() == 0) {
             int gpuUtil = QString::fromLocal8Bit(utilProc.readAllStandardOutput()).trimmed().toInt();
-            // assign the overall utilization to GPU processes
             for (auto it = usage.begin(); it != usage.end(); ++it) {
                 if (it.value() == -2) it.value() = gpuUtil;
             }
@@ -147,7 +207,6 @@ namespace {
         return usage;
     }
 
-    // parse rocm-smi output to get per-process GPU usage
     QMap<int, int> getAmdGpuUsage() {
         QMap<int, int> usage;
 
@@ -156,14 +215,12 @@ namespace {
         proc.waitForFinished(3000);
 
         if (proc.exitCode() != 0) {
-            // fallback: try rocm-smi without json
             QProcess fallback;
             fallback.start("rocm-smi", {"--showprocessuse"});
             fallback.waitForFinished(3000);
             if (fallback.exitCode() != 0) return usage;
 
             const auto output = QString::fromLocal8Bit(fallback.readAllStandardOutput());
-            // parse lines like: "PID 12345, 45% GPU"
             QRegularExpression re(R"(PID\s+(\d+),?\s+(\d+)%?\s*GPU)");
             QRegularExpressionMatchIterator it = re.globalMatch(output);
             while (it.hasNext()) {
@@ -176,7 +233,6 @@ namespace {
         }
 
         const auto json = QJsonDocument::fromJson(proc.readAllStandardOutput()).object();
-        // try to find process info in JSON
         const auto processList = json["program-list"].toArray();
         for (const auto& procEntry : processList) {
             auto obj = procEntry.toObject();
@@ -199,18 +255,37 @@ namespace {
 QList<ProcessInfo> mako::ui::getRunningProcesses() {
     auto rawProcesses = readAllProcesses();
     const auto gpuUsage = getGpuUsageMap();
+    const auto windowPids = getWindowPids();
 
     QList<ProcessInfo> result;
     for (const auto& rp : rawProcesses) {
+        // only show processes with a visible window
+        if (!windowPids.contains(rp.pid))
+            continue;
+
         ProcessInfo info;
         info.pid = rp.pid;
         info.name = rp.name;
         info.cmdline = rp.cmdline;
         info.gpuUsage = gpuUsage.value(rp.pid, -1);
+
+        // check if uses Vulkan
+        bool vulkan = usesVulkan(rp.pid);
+        QString displayName = rp.name;
+
+        // get window title if available
+        QString winTitle = getWindowTitle(rp.pid);
+        if (!winTitle.isEmpty() && winTitle != displayName)
+            displayName = winTitle + " (" + rp.name + ")";
+
+        if (vulkan)
+            displayName += " [Vulkan]";
+
+        info.name = displayName;
         result.append(info);
     }
 
-    // sort: GPU processes first (by usage desc), then unknown, then alphabetical
+    // sort: highest GPU usage first
     std::sort(result.begin(), result.end(), [](const ProcessInfo& a, const ProcessInfo& b) {
         if (a.gpuUsage >= 0 && b.gpuUsage < 0) return true;
         if (a.gpuUsage < 0 && b.gpuUsage >= 0) return false;

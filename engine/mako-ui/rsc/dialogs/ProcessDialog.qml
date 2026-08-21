@@ -56,7 +56,7 @@ Dialog {
             currentIndex: -1
 
             delegate: Rectangle {
-                width: processList.width
+                width: ListView.view.width
                 height: 36
                 color: processList.currentIndex === index
                     ? Qt.rgba(palette.highlight.r, palette.highlight.g, palette.highlight.b, 0.3)
