@@ -8,6 +8,20 @@ Dialog {
     title: strings ? strings.detectProcess : "Detect Process"
     signal selected(string processName)
 
+    readonly property var filteredRows: {
+        const total = backend.processCount;
+        const all = [];
+        for (let i = 0; i < total; ++i)
+            all.push(i);
+        const query = searchField.text.toLowerCase().trim();
+        if (query.length === 0)
+            return all;
+        return all.filter(function(i) {
+            const haystack = (backend.getProcessDisplay(i) + " " + backend.getProcessPath(i)).toLowerCase();
+            return haystack.indexOf(query) !== -1;
+        });
+    }
+
     modal: true
     dim: true
     x: (parent.width - width) / 2
@@ -47,8 +61,15 @@ Dialog {
             }
         }
 
+        TextField {
+            id: searchField
+            Layout.fillWidth: true
+            placeholderText: strings ? strings.searchProcess : "Search process..."
+            selectByMouse: true
+        }
+
         Label {
-            visible: backend.processCount === 0
+            visible: backend.processCount === 0 || root.filteredRows.length === 0
             Layout.fillWidth: true
             Layout.margins: 16
             text: strings ? strings.noProcessesFound : "No GPU/Vulkan processes detected. Open your game or emulator and refresh."
@@ -59,11 +80,11 @@ Dialog {
 
         ListView {
             id: processList
-            visible: backend.processCount > 0
+            visible: root.filteredRows.length > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: backend.processList
+            model: root.filteredRows
             currentIndex: -1
 
             delegate: Rectangle {
@@ -85,7 +106,7 @@ Dialog {
 
                     Label {
                         Layout.fillWidth: true
-                        text: backend.getProcessDisplay(index)
+                        text: backend.getProcessDisplay(modelData)
                         elide: Text.ElideRight
                         font.bold: true
                         color: palette.text
@@ -94,7 +115,7 @@ Dialog {
                     Label {
                         Layout.fillWidth: true
                         visible: text.length > 0
-                        text: backend.getProcessPath(index)
+                        text: backend.getProcessPath(modelData)
                         elide: Text.ElideMiddle
                         font.pixelSize: 11
                         color: Qt.rgba(palette.text.r, palette.text.g, palette.text.b, 0.55)
@@ -105,11 +126,11 @@ Dialog {
                     anchors.fill: parent
                     onClicked: {
                         processList.currentIndex = index;
-                        backend.setSelectedProcessIndex(index);
+                        backend.setSelectedProcessIndex(modelData);
                     }
                     onDoubleClicked: {
                         processList.currentIndex = index;
-                        backend.setSelectedProcessIndex(index);
+                        backend.setSelectedProcessIndex(modelData);
                         var name = backend.getSelectedProcessName();
                         if (name.length > 0) {
                             root.selected(name);

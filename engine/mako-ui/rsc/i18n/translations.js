@@ -66,6 +66,7 @@ var strings = [
         "refresh": "Refresh",
         "processesFound": "processes found",
         "noProcessesFound": "No GPU/Vulkan processes detected. Open your game or emulator and click refresh.",
+        "searchProcess": "Search process...",
         "selectProcess": "Select",
         "cancel": "Cancel"
     },
@@ -132,6 +133,7 @@ var strings = [
         "refresh": "Atualizar",
         "processesFound": "processos encontrados",
         "noProcessesFound": "Nenhum processo Vulkan/GPU detectado. Abra seu jogo ou emulador e clique em atualizar.",
+        "searchProcess": "Pesquisar processo...",
         "selectProcess": "Selecionar",
         "cancel": "Cancelar"
     },
@@ -198,6 +200,7 @@ var strings = [
         "refresh": "Atualizar",
         "processesFound": "processos encontrados",
         "noProcessesFound": "Nenhum processo Vulkan/GPU detetado. Abra o seu jogo ou emulador e clique em atualizar.",
+        "searchProcess": "Pesquisar processo...",
         "selectProcess": "Selecionar",
         "cancel": "Cancelar"
     },
@@ -264,6 +267,7 @@ var strings = [
         "refresh": "Actualizar",
         "processesFound": "procesos encontrados",
         "noProcessesFound": "No se detectaron procesos Vulkan/GPU. Abre tu juego o emulador y haz clic en actualizar.",
+        "searchProcess": "Buscar proceso...",
         "selectProcess": "Seleccionar",
         "cancel": "Cancelar"
     }

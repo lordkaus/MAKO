@@ -4,6 +4,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 #include <QProcess>
 #include <QRegularExpression>
@@ -120,6 +121,26 @@ namespace {
             }
         }
         return total;
+    }
+
+    // sandboxed processes (flatpak, steam, hardened launchers) deny access to
+    // /proc/[pid]/fd and maps even for the same uid
+    bool isFdDirReadable(int pid) {
+        return QFileInfo(QString("/proc/%1/fd").arg(pid)).isReadable();
+    }
+
+    // user-launched applications live under the systemd user app slice;
+    // readable even for sandboxed processes
+    bool inUserAppSlice(int pid) {
+        QFile cgroup(QString("/proc/%1/cgroup").arg(pid));
+        if (!cgroup.open(QIODevice::ReadOnly | QIODevice::Text))
+            return false;
+
+        while (!cgroup.atEnd()) {
+            if (cgroup.readLine().contains("/app.slice/"))
+                return true;
+        }
+        return false;
     }
 
     QList<RawProcess> readAllProcesses() {
@@ -255,9 +276,14 @@ QList<ProcessInfo> mako::ui::getRunningProcesses() {
         if (!vulkan)
             gpu = hasGpuHandles(rp.pid);
 
-        // only processes actually using the GPU or loading Vulkan
-        if (!vulkan && !gpu)
-            continue;
+        if (!vulkan && !gpu) {
+            // sandboxed user apps deny fd+maps reads; keep them when they are
+            // user-launched applications, drop unreadable system processes
+            if (isFdDirReadable(rp.pid))
+                continue;
+            if (!inUserAppSlice(rp.pid))
+                continue;
+        }
 
         ProcessInfo info;
         info.pid = rp.pid;
