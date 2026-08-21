@@ -65,11 +65,60 @@ namespace {
         return !s.isEmpty();
     }
 
-    // get PIDs of processes that have a visible X11/Wayland window
+    bool hasDisplayConnection(int pid) {
+        QFile environFile(QString("/proc/%1/environ").arg(pid));
+        if (!environFile.open(QIODevice::ReadOnly))
+            return false;
+        QByteArray data = environFile.readAll();
+        return data.contains("DISPLAY=") || data.contains("WAYLAND_DISPLAY=");
+    }
+
+    bool isSystemNoise(const QString& name, const QString& cmdline) {
+        static const QStringList noiseNames = {
+            "bash", "zsh", "sh", "fish", "konsole", "plasmashell",
+            "kwin_wayland", "kwin_x11", "startplasma",
+            "kdeconnectd", "baloorunner", "xdg-desktop-por",
+            "xdg-permission-", "xdg-document-po",
+            "xsettingsd", "obexd", "shelly-notifica",
+            "cachyos-hello", "drkonqi-coredum",
+            "Isolated Web Co", "Isolated Servic",
+            "mako-ui", "mako-cli", "opencode",
+            "dbus-daemon", "pipewire", "wireplumber",
+            "pulseaudio", "plasma-discover", "systemd",
+            "kactivitymanagerd", "kaccess", "kcminit",
+            "kded5", "kded6", "khellInitial", "kscreen",
+            "ksmserver", "kwalletd", "polkit-kde",
+            "spectacle", "gwenview", "dolphin",
+            "latte-dock", "yakuake", "klipper",
+            "korgac", "kalarm", "kate", "kwrite",
+            "okular", "ark", "filelight", "partitionmanager",
+            "sddm", "Xwayland", "mutter", "gnome-shell",
+            "innamon-session", "cinnamon", "xfce4-session",
+            "lxqt-panel", "budgie-wm", "pantheon-",
+            "io.elementary.", "io.github.",
+        };
+
+        for (const auto& n : noiseNames) {
+            if (name.contains(n, Qt::CaseInsensitive))
+                return true;
+        }
+
+        static const QStringList noiseCmdParts = {
+            "-contentproc", "-isForBrowser", "-greomni", "-appomni",
+            "--bus-name", "--internal", "--sprite", "--type=utility",
+            "kdeconnect", "plasma-", "xdg-",
+        };
+        for (const auto& p : noiseCmdParts) {
+            if (cmdline.contains(p))
+                return true;
+        }
+
+        return false;
+    }
+
     QSet<int> getWindowPids() {
         QSet<int> pids;
 
-        // try wmctrl first
         QProcess wmctrl;
         wmctrl.start("wmctrl", {"-l", "-p"});
         wmctrl.waitForFinished(3000);
@@ -88,7 +137,6 @@ namespace {
                 return pids;
         }
 
-        // fallback: xdotool
         QProcess xdotool;
         xdotool.start("xdotool", {"search", "--onlyvisible", "--name", ""});
         xdotool.waitForFinished(3000);
@@ -105,12 +153,23 @@ namespace {
                         pids.insert(pid);
                 }
             }
+            if (!pids.isEmpty())
+                return pids;
+        }
+
+        QDir procDir("/proc");
+        const auto entries = procDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const auto& entry : entries) {
+            if (!isNumeric(entry)) continue;
+            int pid = entry.toInt();
+            if (pid <= 0) continue;
+            if (hasDisplayConnection(pid))
+                pids.insert(pid);
         }
 
         return pids;
     }
 
-    // check if a process uses Vulkan by reading /proc/[pid]/maps
     bool usesVulkan(int pid) {
         QFile mapsFile(QString("/proc/%1/maps").arg(pid));
         if (!mapsFile.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -126,20 +185,6 @@ namespace {
                 return true;
         }
         return false;
-    }
-
-    // get window title for a PID (from WM_CLASS or _NET_WM_NAME)
-    QString getWindowTitle(int pid) {
-        // try xdotool to get window name
-        QProcess xdotool;
-        xdotool.start("xdotool", {"search", "--pid", QString::number(pid), "--name", "getwindowname"});
-        xdotool.waitForFinished(2000);
-        if (xdotool.exitCode() == 0) {
-            auto name = QString::fromLocal8Bit(xdotool.readAllStandardOutput()).trimmed();
-            if (!name.isEmpty())
-                return name;
-        }
-        return {};
     }
 
     QList<RawProcess> readAllProcesses() {
@@ -259,8 +304,10 @@ QList<ProcessInfo> mako::ui::getRunningProcesses() {
 
     QList<ProcessInfo> result;
     for (const auto& rp : rawProcesses) {
-        // only show processes with a visible window
         if (!windowPids.contains(rp.pid))
+            continue;
+
+        if (isSystemNoise(rp.name, rp.cmdline))
             continue;
 
         ProcessInfo info;
@@ -269,14 +316,8 @@ QList<ProcessInfo> mako::ui::getRunningProcesses() {
         info.cmdline = rp.cmdline;
         info.gpuUsage = gpuUsage.value(rp.pid, -1);
 
-        // check if uses Vulkan
         bool vulkan = usesVulkan(rp.pid);
         QString displayName = rp.name;
-
-        // get window title if available
-        QString winTitle = getWindowTitle(rp.pid);
-        if (!winTitle.isEmpty() && winTitle != displayName)
-            displayName = winTitle + " (" + rp.name + ")";
 
         if (vulkan)
             displayName += " [Vulkan]";
@@ -285,8 +326,10 @@ QList<ProcessInfo> mako::ui::getRunningProcesses() {
         result.append(info);
     }
 
-    // sort: highest GPU usage first
     std::sort(result.begin(), result.end(), [](const ProcessInfo& a, const ProcessInfo& b) {
+        bool aVulkan = a.name.contains("[Vulkan]");
+        bool bVulkan = b.name.contains("[Vulkan]");
+        if (aVulkan != bVulkan) return aVulkan;
         if (a.gpuUsage >= 0 && b.gpuUsage < 0) return true;
         if (a.gpuUsage < 0 && b.gpuUsage >= 0) return false;
         if (a.gpuUsage >= 0 && b.gpuUsage >= 0) return a.gpuUsage > b.gpuUsage;
